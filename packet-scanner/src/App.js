@@ -12,30 +12,69 @@ const QRScanner = ({ onScan, onError, isActive = true }) => {
 
     const startScanning = async () => {
       try {
-        readerRef.current = new BrowserMultiFormatReader();
-
-        const devices = await readerRef.current.listVideoInputDevices();
-        if (devices.length === 0) {
-          onError(new Error('No camera found'));
+        // Check if we're running on HTTPS or localhost
+        const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+        
+        if (!isSecureContext) {
+          onError(new Error('Camera access requires HTTPS. Please use HTTPS or localhost.'));
           return;
         }
 
-        const selectedDeviceId = devices[0].deviceId;
+        // Check if MediaDevices API is supported
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          onError(new Error('Camera access not supported in this browser.'));
+          return;
+        }
 
-        await readerRef.current.decodeFromVideoDevice(
-          selectedDeviceId,
-          videoRef.current,
-          (result, error) => {
-            if (result) {
-              onScan(result.getText());
-            }
-            if (error && error.name !== 'NotFoundError') {
-              onError(error);
-            }
+        readerRef.current = new BrowserMultiFormatReader();
+
+        try {
+          // Try to get video devices
+          const devices = await readerRef.current.listVideoInputDevices();
+          
+          if (devices.length === 0) {
+            onError(new Error('No camera found. Please ensure camera is connected and permissions are granted.'));
+            return;
           }
-        );
+
+          // Use the first available camera (usually back camera on mobile)
+          const selectedDeviceId = devices[0].deviceId;
+
+          await readerRef.current.decodeFromVideoDevice(
+            selectedDeviceId,
+            videoRef.current,
+            (result, error) => {
+              if (result) {
+                onScan(result.getText());
+              }
+              if (error && error.name !== 'NotFoundError') {
+                console.warn('Scanner error (ignored):', error);
+              }
+            }
+          );
+        } catch (deviceError) {
+          // Fallback: try without specifying device ID
+          console.warn('Device enumeration failed, trying fallback method:', deviceError);
+          
+          try {
+            await readerRef.current.decodeFromVideoDevice(
+              undefined, // Let browser choose default camera
+              videoRef.current,
+              (result, error) => {
+                if (result) {
+                  onScan(result.getText());
+                }
+                if (error && error.name !== 'NotFoundError') {
+                  console.warn('Scanner error (ignored):', error);
+                }
+              }
+            );
+          } catch (fallbackError) {
+            onError(new Error(`Camera access failed. Please ensure you're using HTTPS and have granted camera permissions. Error: ${fallbackError.message}`));
+          }
+        }
       } catch (error) {
-        onError(error);
+        onError(new Error(`Failed to initialize camera: ${error.message}`));
       }
     };
 
@@ -102,7 +141,19 @@ function App() {
 
   const handleError = (error) => {
     console.error('QR Scanner Error:', error);
-    setMessage(`Scanner error: ${error.message}`);
+    
+    let errorMessage = error.message;
+    
+    // Provide more helpful error messages
+    if (error.message.includes('enumerate devices') || error.message.includes('method not supported')) {
+      errorMessage = '⚠️ Camera access requires HTTPS when deployed. Please ensure your server uses HTTPS or try on localhost.';
+    } else if (error.message.includes('Permission denied')) {
+      errorMessage = '⚠️ Camera permission denied. Please allow camera access and refresh the page.';
+    } else if (error.message.includes('No camera found')) {
+      errorMessage = '⚠️ No camera detected. Please ensure a camera is connected and try again.';
+    }
+    
+    setMessage(`Scanner error: ${errorMessage}`);
   };
 
   const handleSubmit = async () => {
@@ -133,9 +184,28 @@ function App() {
     setMessage('All fields reset.');
   };
 
+  // Check if we're in a secure context
+  const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+
   return (
     <div className="App" style={{ padding: '20px', maxWidth: '900px', margin: '0 auto' }}>
       <h1>QR Code Packet Scanner</h1>
+      
+      {/* Security Warning */}
+      {!isSecureContext && (
+        <div style={{
+          backgroundColor: '#fff3cd',
+          color: '#856404',
+          padding: '15px',
+          borderRadius: '5px',
+          marginBottom: '20px',
+          border: '1px solid #ffeaa7'
+        }}>
+          <strong>⚠️ Security Notice:</strong> Camera access requires HTTPS. This app may not work properly on HTTP connections.
+          <br />
+          <small>For deployment, please ensure your server uses HTTPS or test on localhost.</small>
+        </div>
+      )}
 
       {/* Field Selector */}
       <div style={{ marginBottom: '20px' }}>
